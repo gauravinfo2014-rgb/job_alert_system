@@ -1,8 +1,12 @@
+
 name: UX Job Alert — 11 Companies
 
 on:
   schedule:
+    # Runs every 2 hours
     - cron: "0 */2 * * *"
+
+  # Allow manual trigger from the GitHub Actions tab
   workflow_dispatch:
 
 jobs:
@@ -23,6 +27,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Cache seen_jobs.json between runs so we don't re-alert on old jobs
       - name: Restore seen jobs cache
         uses: actions/cache@v4
         with:
@@ -32,11 +37,12 @@ jobs:
 
       - name: Run job alert system
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python main.py
 
+      # Save the updated seen_jobs.json so next run knows what we've already sent
       - name: Save seen jobs cache
         if: always()
         uses: actions/cache@v4
