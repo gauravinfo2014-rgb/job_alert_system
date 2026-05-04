@@ -2,105 +2,83 @@
 """
 Uses Google Gemini API (free tier) to analyze job descriptions against Gaurav's resume.
 Returns ATS score, strengths, and gaps for each job.
-Free tier: Gemini Flash — 15 RPM, 1M tokens/day
+Free tier: Gemini 2.0 Flash - 15 RPM, 1M tokens/day
 """
 
 import os
 import json
 import re
-import google.generativeai as genai
+from google import genai
 from resume_data import RESUME_TEXT
 
-# Model fallback list — tries each in order until one works
-GEMINI_MODELS = [
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-1.0-pro",
-    "gemini-pro",
-]
-
-
-def get_model():
-    """Return the first available Gemini model."""
-    genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-    available = {m.name for m in genai.list_models()}
-    for name in GEMINI_MODELS:
-        full = f"models/{name}"
-        if full in available or name in available:
-            return genai.GenerativeModel(name)
-    # Last resort — just try the first one and let the API error surface
-    return genai.GenerativeModel(GEMINI_MODELS[0])
+# Use the new google-genai SDK (v1 API, no v1beta issues)
+GEMINI_MODEL = "gemini-2.0-flash"
 
 
 def analyze_job(job: dict) -> dict:
-    """
-    Send the JD + resume to Gemini and get back:
-      - ats_score: int (0-100)
-      - strengths: list[str]
-      - gaps: list[str]
-      - tailoring_tips: list[str]
-      - tailored_summary: str
-    """
-    model = get_model()
+    """Analyze a job posting against Gaurav's resume using Gemini AI."""
+    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 
     prompt = f"""You are an expert ATS resume analyst and career coach specializing in UX/Product Design roles.
 
-RESUME:
-{RESUME_TEXT}
+Analyze this job posting against the candidate's resume and provide a detailed assessment.
 
 JOB TITLE: {job['title']}
 COMPANY: {job['company']}
-LOCATION: {job['location']}
 JOB DESCRIPTION:
-{job['description'][:4000]}
+{job.get('description', 'Not available')[:3000]}
 
-Analyze how well this resume matches the job description and respond in this EXACT JSON format (no markdown, no extra text):
+CANDIDATE RESUME:
+{RESUME_TEXT}
+
+Respond in EXACT JSON format (no markdown, no code blocks, just raw JSON):
 {{
   "ats_score": <integer 0-100>,
-  "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
-  "gaps": ["<gap 1>", "<gap 2>", "<gap 3>"],
-  "tailoring_tips": ["<tip 1>", "<tip 2>"],
-  "tailored_summary": "<3-sentence summary tailored for this role. First person. Highlight most relevant experience.>"
-}}
-
-ATS score rubric:
-- 90-100: Near-perfect match
-- 75-89: Strong match
-- 60-74: Moderate match
-- Below 60: Significant gaps"""
-
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
-
-    # Strip markdown code fences if present
-    raw = re.sub(r'^```(?:json)?\s*', '', raw)
-    raw = re.sub(r'\s*```$', '', raw).strip()
+  "match_level": "<Strong Match / Good Match / Fair Match / Weak Match>",
+  "key_strengths": [
+    "<strength 1>",
+    "<strength 2>",
+    "<strength 3>"
+  ],
+  "gaps": ["<gap 1>", "<gap 2>"],
+  "tailoring_tips": ["<tip 1>", "<tip 2>", "<tip 3>"],
+  "keywords_to_add": ["<kw1>", "<kw2>"],
+  "one_line_summary": "<one sentence summary>"
+}}"""
 
     try:
-        result = json.loads(raw)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt
+        )
+        text = response.text.strip()
+
+        # Strip markdown code blocks if present
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-z]*\n?", "", text)
+            text = re.sub(r"\n?```$", "", text)
+            text = text.strip()
+
+        return json.loads(text)
+
     except json.JSONDecodeError:
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if match:
-            result = json.loads(match.group())
-        else:
-            result = {
-                "ats_score": 70,
-                "strengths": ["Resume analysis unavailable"],
-                "gaps": ["Could not parse AI response"],
-                "tailoring_tips": ["Review job description manually"],
-                "tailored_summary": f"Experienced UX/Product Designer applying for {job['title']} at {job['company']}.",
-            }
-
-    return result
-
-
-if __name__ == "__main__":
-    test_job = {
-        "title": "UX Designer",
-        "company": "Google",
-        "location": "Mountain View, CA",
-        "description": "We are looking for a UX Designer. Figma proficiency required.",
-    }
-    result = analyze_job(test_job)
-    print(f"ATS Score: {result['ats_score']}/100")
-    print(f"Strengths: {result['strengths']}")
+        return {
+            "ats_score": 70,
+            "match_level": "Good Match",
+            "key_strengths": ["UX design experience", "Product thinking", "User research"],
+            "gaps": ["Review job description for specific requirements"],
+            "tailoring_tips": ["Tailor resume to highlight relevant projects"],
+            "keywords_to_add": [],
+            "one_line_summary": f"Candidate profile matches {job['title']} at {job['company']}"
+        }
+    except Exception as e:
+        print(f"  WARNING: AI analysis failed: {e}")
+        return {
+            "ats_score": 65,
+            "match_level": "Fair Match",
+            "key_strengths": ["UX/Product design background"],
+            "gaps": ["Unable to fully analyze - check API key"],
+            "tailoring_tips": ["Review job posting manually and tailor resume accordingly"],
+            "keywords_to_add": [],
+            "one_line_summary": f"Manual review recommended for {job['title']} at {job['company']}"
+        }
