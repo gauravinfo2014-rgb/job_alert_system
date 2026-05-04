@@ -2,7 +2,7 @@
 """
 Uses Google Gemini API (free tier) to analyze job descriptions against Gaurav's resume.
 Returns ATS score, strengths, and gaps for each job.
-Free tier: Gemini 1.5 Flash — 15 RPM, 1M tokens/day
+Free tier: Gemini Flash — 15 RPM, 1M tokens/day
 """
 
 import os
@@ -10,6 +10,26 @@ import json
 import re
 import google.generativeai as genai
 from resume_data import RESUME_TEXT
+
+# Model fallback list — tries each in order until one works
+GEMINI_MODELS = [
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-1.0-pro",
+    "gemini-pro",
+]
+
+
+def get_model():
+    """Return the first available Gemini model."""
+    genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+    available = {m.name for m in genai.list_models()}
+    for name in GEMINI_MODELS:
+        full = f"models/{name}"
+        if full in available or name in available:
+            return genai.GenerativeModel(name)
+    # Last resort — just try the first one and let the API error surface
+    return genai.GenerativeModel(GEMINI_MODELS[0])
 
 
 def analyze_job(job: dict) -> dict:
@@ -21,8 +41,7 @@ def analyze_job(job: dict) -> dict:
       - tailoring_tips: list[str]
       - tailored_summary: str
     """
-    genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = get_model()
 
     prompt = f"""You are an expert ATS resume analyst and career coach specializing in UX/Product Design roles.
 
@@ -54,8 +73,8 @@ ATS score rubric:
     raw = response.text.strip()
 
     # Strip markdown code fences if present
-    raw = re.sub(r'^\x60\x60\x60(?:json)?\s*', '', raw)
-    raw = re.sub(r'\s*\x60\x60\x60$', '', raw).strip()
+    raw = re.sub(r'^```(?:json)?\s*', '', raw)
+    raw = re.sub(r'\s*```$', '', raw).strip()
 
     try:
         result = json.loads(raw)
@@ -80,9 +99,8 @@ if __name__ == "__main__":
         "title": "UX Designer",
         "company": "Google",
         "location": "Mountain View, CA",
-        "description": "We are looking for a UX Designer. Figma proficiency required. User research, wireframes, prototypes.",
+        "description": "We are looking for a UX Designer. Figma proficiency required.",
     }
     result = analyze_job(test_job)
     print(f"ATS Score: {result['ats_score']}/100")
     print(f"Strengths: {result['strengths']}")
-    print(f"Gaps: {result['gaps']}")
